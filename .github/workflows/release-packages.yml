@@ -70,6 +70,7 @@ jobs:
       - name: Install WiX UI extension
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
+        working-directory: ${{ github.workspace }}\build
         run: |
           wix --version
           wix extension add WixToolset.UI.wixext/4.0.6
@@ -109,9 +110,23 @@ jobs:
 
       - name: Package Windows MSI
         if: ${{ runner.os == 'Windows' }}
-        shell: bash
+        shell: pwsh
         working-directory: ${{ github.workspace }}\build
         run: cpack -C Release -G WIX
+
+      - name: Show WiX log on failure
+        if: ${{ runner.os == 'Windows' && failure() }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\build
+        run: |
+          $log = ".\_CPack_Packages\win64\WIX\wix.log"
+          if (Test-Path $log) {
+            Write-Host "---- WiX log start ----"
+            Get-Content $log
+            Write-Host "---- WiX log end ----"
+          } else {
+            Write-Host "WiX log not found at $log"
+          }
 
       - name: Package Linux DEB
         if: ${{ runner.os == 'Linux' }}
