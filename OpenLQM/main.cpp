@@ -23,6 +23,7 @@
 #include <sstream>
 #include <array>
 #include <algorithm>
+#include <opencv2/opencv.hpp>
 
 const std::string LICENSE_TEXT = \
 "Open Latent Quality Metric (OpenLQM), Version " + OpenLQM::VERSION + \
@@ -47,7 +48,7 @@ Investigation's Criminal Justice Information Services Division in 2012-2014.
 )";
 
 const std::string USAGE_TEXT = \
-R"(Usage:  openlqm [-v | --verbose] [-h | --headers] [(-p | --ppi) <ppi> ] InputFile
+R"(Usage:  openlqm [-v | --verbose] [-h | --headers] [(-p | --ppi) <ppi>] [(-o | --output) <outputImage>] InputFile
         openlqm [--version]
 
     Analyzes a friction ridge image and returns latent quality metric(s).
@@ -64,9 +65,49 @@ R"(Usage:  openlqm [-v | --verbose] [-h | --headers] [(-p | --ppi) <ppi> ] Input
 	    unsupported ppi value, then the value provided with this flag is
 		used as the image's ppi.
 		Valid values are 500, 1000, 2000, and 4000.
+    -o: Output path for a colorized clarity map image (for example, .png).
+        The image will be written at the same dimensions as the input image.
 )";
 
-void ProcessAll(const std::string& filePath, bool verbose, bool printHeaders, unsigned int validatedPpi) {
+bool SaveColorizedClarityMap(const OpenLQM::Fingerprint& inpImg, const OpenLQM::QualityMap& qualityMap, const std::string& outputPath) {
+	if (qualityMap.buffer.empty() || qualityMap.width == 0 || qualityMap.height == 0) {
+		return false;
+	}
+
+	cv::Mat qualityIndexMap(static_cast<int>(qualityMap.height), static_cast<int>(qualityMap.width), CV_8UC1);
+	memcpy(qualityIndexMap.data, qualityMap.buffer.data(), qualityMap.buffer.size());
+
+	cv::Mat colorMap(static_cast<int>(qualityMap.height), static_cast<int>(qualityMap.width), CV_8UC3, cv::Scalar(0, 0, 0));
+	for (int y = 0; y < colorMap.rows; ++y) {
+		for (int x = 0; x < colorMap.cols; ++x) {
+			unsigned char q = qualityIndexMap.at<unsigned char>(y, x);
+			cv::Vec3b color(0, 0, 0); // BGR
+			switch (q) {
+				case 1: color = cv::Vec3b(0, 0, 255); break;     // red
+				case 2: color = cv::Vec3b(0, 255, 255); break;   // yellow
+				case 3: color = cv::Vec3b(0, 255, 0); break;     // green
+				case 4: color = cv::Vec3b(255, 0, 0); break;     // blue
+				case 5: color = cv::Vec3b(255, 255, 0); break;   // cyan
+				default: break;                                  // black
+			}
+			colorMap.at<cv::Vec3b>(y, x) = color;
+		}
+	}
+
+	cv::Mat output;
+	cv::resize(
+		colorMap,
+		output,
+		cv::Size(static_cast<int>(inpImg.width), static_cast<int>(inpImg.height)),
+		0.0,
+		0.0,
+		cv::INTER_NEAREST
+	);
+
+	return cv::imwrite(outputPath, output);
+}
+
+void ProcessAll(const std::string& filePath, bool verbose, bool printHeaders, unsigned int validatedPpi, const std::string& outputPath) {
 	OpenLQM::Fingerprint inpImg;
 	try {
 		inpImg.LoadFromFilePath(filePath, static_cast<OpenLQM::PixelDensity>(validatedPpi));
@@ -76,9 +117,16 @@ void ProcessAll(const std::string& filePath, bool verbose, bool printHeaders, un
 	}
 
 	OpenLQM::Metrics metrics;
-	OpenLQM::GetAllMetricsFromFingerprint(inpImg, metrics);
+	OpenLQM::QualityMap qualityMap;
+	OpenLQM::GetAllMetricsAndQualityMapFromFingerprint(inpImg, metrics, qualityMap);
 
 	OpenLQM::Supplement::PrintMetrics(metrics, filePath, verbose, printHeaders);
+
+	if (!outputPath.empty()) {
+		if (!SaveColorizedClarityMap(inpImg, qualityMap, outputPath)) {
+			std::cerr << "Failed to write output clarity map image (" << outputPath << ")" << std::endl;
+		}
+	}
 }
 
 int main(int argc, char* argV[]) {
@@ -88,6 +136,7 @@ int main(int argc, char* argV[]) {
 		bool verbose = false;
 		bool printHeaders = false;
 		bool printVersion = false;
+		std::string outputPath;
 		unsigned int ppi = 0;
 		std::vector<std::string> args;
 		for (int i = 1; i < argc; ++i) {
@@ -133,6 +182,14 @@ int main(int argc, char* argV[]) {
 					std::cerr << "Unsupported ppi value (" << arg << "). Valid values are 500, 1000, 2000, and 4000." << std::endl;
 					return -1;
 				}
+			} else if (arg == "-o" || arg == "--output") {
+				if (i == static_cast<int>(args.size()) - 1) {
+					std::cerr << "Argument " << arg << " missing value" << std::endl;
+					return -1;
+				}
+
+				++i;
+				outputPath = args[static_cast<std::size_t>(i)];
 			} else if (!arg.empty() && arg[0] != '-' && filePath.empty()) {
 				filePath = arg;
 			} else {
@@ -148,7 +205,7 @@ int main(int argc, char* argV[]) {
 				std::cout << USAGE_TEXT;
 				return 0;
 			}
-			ProcessAll(filePath, verbose, printHeaders, ppi);
+			ProcessAll(filePath, verbose, printHeaders, ppi, outputPath);
 		}
 	} else {
 		std::cout << USAGE_TEXT;

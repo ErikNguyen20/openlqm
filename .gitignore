@@ -1,6 +1,7 @@
 # Generated files:
 openlqm.hpp
 build/
+package/
 
 # vcpkg
 vcpkg_installed

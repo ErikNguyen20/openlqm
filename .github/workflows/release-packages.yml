@@ -1,0 +1,203 @@
+name: Release Packages
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.config.os }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: ubuntu-24.04 }
+          - { os: windows-2025 }
+
+    steps:
+      - name: Configure vcpkg cache variables
+        shell: bash
+        run: |
+          mkdir -p "${VCPKG_INSTALLATION_ROOT}/downloads"
+          mkdir -p "${VCPKG_INSTALLATION_ROOT}/bincache"
+          echo "VCPKG_DOWNLOADS=${VCPKG_INSTALLATION_ROOT}/downloads" >> "${GITHUB_ENV}"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=${VCPKG_INSTALLATION_ROOT}/bincache" >> "${GITHUB_ENV}"
+
+      - name: Configure vcpkg cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_DOWNLOADS }}
+            ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ${{ matrix.config.os }}-vcpkg-cache
+
+      - name: Install Ubuntu Packages
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install \
+            autoconf \
+            autoconf-archive \
+            automake \
+            libtool \
+            libx11-dev \
+            libxft-dev \
+            libxext-dev \
+            libltdl-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxrandr-dev \
+            dpkg-dev
+
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Make Build Directory
+        run: cmake -E make_directory "${{ github.workspace }}/build"
+
+      - name: Install WiX
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.6
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install WiX UI extension
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          wix --version
+          wix extension add WixToolset.UI.wixext/4.0.6
+          wix extension list
+
+      - name: Configure CMake (Single-config Generator)
+        if: ${{ runner.os != 'Windows' }}
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            "${GITHUB_WORKSPACE}"
+
+      - name: Configure CMake (Multi-config Generator)
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}\build
+        run: |
+          cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CONFIGURATION_TYPES=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            "${GITHUB_WORKSPACE}"
+
+      - name: Build (Single-config Generator)
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: cmake --build .
+
+      - name: Build (Multi-config Generator)
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}\build
+        run: cmake --build . --config Release
+
+      - name: Package Windows MSI
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}\build
+        run: cpack -C Release -G WIX
+
+      - name: Package Linux DEB
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: cpack -G DEB
+
+      - name: Hash Windows package(s)
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\build
+        run: |
+          $pkgs = Get-ChildItem -File -Filter *.msi
+          if (-not $pkgs) {
+            throw "No .msi package produced by CPack."
+          }
+
+          foreach ($pkg in $pkgs) {
+            $hashFile = "$($pkg.FullName).sha256.txt"
+            Get-FileHash $pkg.FullName -Algorithm SHA256 |
+              Format-List |
+              Out-File $hashFile
+          }
+
+      - name: Hash Linux package(s)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          shopt -s nullglob
+          pkgs=( *.deb )
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "No .deb package produced by CPack."
+            exit 1
+          fi
+
+          for pkg in "${pkgs[@]}"; do
+            sha256sum "$pkg" > "$pkg.sha256.txt"
+          done
+
+      - name: Upload Windows Release assets
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @()
+          $assets += (Get-ChildItem -File -Filter *.msi | ForEach-Object { $_.FullName })
+          $assets += (Get-ChildItem -File -Filter *.msi.sha256.txt | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) {
+            throw "No Windows assets to upload."
+          }
+
+          gh release upload "${{ github.event.release.tag_name }}" $assets --clobber
+
+      - name: Upload Linux Release assets
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          assets=( *.deb *.deb.sha256.txt )
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "No Linux assets to upload."
+            exit 1
+          fi
+
+          gh release upload "${{ github.event.release.tag_name }}" "${assets[@]}" --clobber
+
+      - name: Upload Windows workflow artifact
+        if: ${{ runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-packages
+          path: |
+            ${{ github.workspace }}/build/*.msi
+            ${{ github.workspace }}/build/*.msi.sha256.txt
+
+      - name: Upload Linux workflow artifact
+        if: ${{ runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-packages
+          path: |
+            ${{ github.workspace }}/build/*.deb
+            ${{ github.workspace }}/build/*.deb.sha256.txt

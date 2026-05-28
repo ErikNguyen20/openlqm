@@ -122,7 +122,7 @@ set_target_properties(OpenLQM PROPERTIES OUTPUT_NAME openlqm)
 target_include_directories(OpenLQM PRIVATE "${openlqm_include_dir}")
 
 # Link the executable to the OpenLQM library
-target_link_libraries(OpenLQM PRIVATE olqm)
+target_link_libraries(OpenLQM PRIVATE olqm ${OpenCV_LIBS})
 
 if(STATICALLY_LINK_EXECUTABLE)
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
