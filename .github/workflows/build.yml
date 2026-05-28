@@ -12,6 +12,8 @@ on:
       - 'NOTICE.txt'
       - 'OpenLQM/openlqm.1'
       - 'README.md'
+      - 'sample_data/**'
+      - 'fresh_install_win.ps1'
 
 jobs:
   build:

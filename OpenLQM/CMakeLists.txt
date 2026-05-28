@@ -17,7 +17,7 @@
 # Investigation's Criminal Justice Information Services Division in 2012-2014.
 
 cmake_minimum_required(VERSION 3.30)
-project("OpenLQM" VERSION 1.0.1 LANGUAGES CXX)
+project("OpenLQM" VERSION 1.0.1.1 LANGUAGES CXX)
 include(openlqm_cmake_utils/init.cmake)
 
 # Search file at FILE_PATH for a variable definition like "<VAR_NAME>=xxx" and define that variable in the caller's scope
